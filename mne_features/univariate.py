@@ -64,11 +64,9 @@ def get_univariate_funcs(sfreq):
 
 def _unbiased_autocorr(x):
     """ Unbiased autocorrelation.
-
     Parameters
     ----------
     x : ndarray, shape (n_times,)
-
     Returns
     -------
     ndarray, shape (2 * n_times + 1,)
@@ -87,13 +85,10 @@ def _unbiased_autocorr(x):
 def _slope_lstsq(x, y):
     """ Utility function which returns the slope of the linear
     regression between x and y.
-
     Parameters
     ----------
     x : ndarray, shape (n_times,)
-
     y : ndarray, shape (n_times,)
-
     Returns
     -------
     float
@@ -132,11 +127,9 @@ def _accumulate_std(x):
 
 def compute_mean(data):
     """ Mean of the data (per channel).
-
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
@@ -146,11 +139,9 @@ def compute_mean(data):
 
 def compute_variance(data):
     """ Variance of the data (per channel).
-
      Parameters
      ----------
      data : shape (n_channels, n_times)
-
      Returns
      -------
      output : ndarray, shape (n_channels,)
@@ -160,11 +151,9 @@ def compute_variance(data):
 
 def compute_std(data):
     """ Standard deviation of the data.
-
     Parameters
     ----------
     data : shape (n_channels, n_times)
-
     Returns
     -------
     output : ndarray, shape (n_channels)
@@ -174,11 +163,9 @@ def compute_std(data):
 
 def compute_ptp(data):
     """ Peak-to-peak (PTP) amplitude of the data (per channel).
-
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
@@ -188,11 +175,9 @@ def compute_ptp(data):
 
 def compute_skewness(data):
     """ Skewness of the data (per channel).
-
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
@@ -204,11 +189,9 @@ def compute_skewness(data):
 
 def compute_kurtosis(data):
     """ Kurtosis of the data (per channel).
-
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
@@ -220,21 +203,17 @@ def compute_kurtosis(data):
 
 def compute_hurst_exponent(data):
     """ Hurst exponent [1, 2] of the data (per channel).
-
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
-
     References
     ----------
     .. [1] Devarajan, K. et al. (2014). EEG-Based Epilepsy Detection and
            Prediction. International Journal of Engineering and Technology,
            6(3), 212.
-
     .. [2] https://en.wikipedia.org/wiki/Hurst_exponent
     """
     n_channels = data.shape[0]
@@ -254,18 +233,14 @@ def compute_hurst_exponent(data):
 
 def _app_samp_entropy_helper(data, emb, metric='chebyshev'):
     """ Utility function for `compute_app_entropy` and `compute_samp_entropy`.
-
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     emb : int (default: 2)
         Embedding dimension.
-
     metric : str (default: chebyshev)
         Name of the metric function used with KDTree. The list of available
         metric functions is given by: `KDTree.valid_metrics`.
-
     Returns
     -------
     output : ndarray, shape (n_channels, 2)
@@ -293,22 +268,17 @@ def _app_samp_entropy_helper(data, emb, metric='chebyshev'):
 
 def compute_app_entropy(data, emb=2, metric='chebyshev'):
     """ Approximate Entropy (AppEn, per channel) [1].
-
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     emb : int (default: 2)
         Embedding dimension.
-
     metric : str (default: chebyshev)
         Name of the metric function used with KDTree. The list of available
         metric functions is given by: `KDTree.valid_metrics`.
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
-
     References
     ----------
     .. [1] Borowska, M. (2015). Entropy-based algorithms in the analysis of
@@ -321,22 +291,17 @@ def compute_app_entropy(data, emb=2, metric='chebyshev'):
 
 def compute_samp_entropy(data, emb=2, metric='chebyshev'):
     """ Sample Entropy (SampEn, per channel) [1].
-
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     emb : int (default: 2)
         Embedding dimension.
-
     metric : str (default: chebyshev)
         Name of the metric function used with KDTree. The list of available
         metric functions is given by: `KDTree.valid_metrics`.
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
-
     References
     ----------
     .. [1] Borowska, M. (2015). Entropy-based algorithms in the analysis of
@@ -349,18 +314,14 @@ def compute_samp_entropy(data, emb=2, metric='chebyshev'):
 
 def compute_decorr_time(sfreq, data):
     """ Decorrelation time (per channel) [1].
-
     Parameters
     ----------
     sfreq : float
         Sampling rate of the data.
-
     data : ndarray, shape (n_channels, n_times)
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
-
     References
     ----------
     .. [1] Teixeira, C. A. et al. (2011). EPILAB: A software package for
@@ -386,27 +347,21 @@ def compute_power_spectrum_freq_bands(sfreq, data,
                                                            30., 100.]),
                                       normalize=True):
     """ Power Spectrum (computed by frequency bands) [1].
-
     Parameters
     ----------
     sfreq : float
         Sampling rate of the data.
-
     data : ndarray, shape (n_channels, n_times)
-
     freq_bands : ndarray, shape (n_freqs,)
         (default: np.array([0.5, 4., 8., 13., 30., 100.]))
         Array defining the frequency bands. The j-th frequency band is defined
         as: [freq_bands[j], freq_bands[j + 1]] (0 <= j <= n_freqs - 1).
-
     normalize : bool (default: True)
         If True, the average power in each frequency band is normalized by
         the total power.
-
     Returns
     -------
     output : ndarray, shape (n_channels * (n_freqs - 1),)
-
     References
     ----------
     .. [1] Teixeira, C. A. et al. (2011). EPILAB: A software package for
@@ -429,26 +384,20 @@ def compute_power_spectrum_freq_bands(sfreq, data,
 
 def compute_spect_hjorth_mobility(sfreq, data, normalize=False):
     """ Hjorth mobility (computed from the power spectrum, per channel) [1].
-
     Parameters
     ----------
     sfreq : float
         Sampling rate of the data.
-
     data : ndarray, shape (n_channels, n_times)
-
     normalize : bool (default: False)
         Normalize the result by the total power (see [2]).
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
-
     References
     ----------
     .. [1] Mormann, F. et al. (2006). Seizure prediction: the long and winding
            road. Brain, 130(2), 314-333.
-
     .. [2] Teixeira, C. A. et al. (2011). EPILAB: A software package for
            studies on the prediction of epileptic seizures. Journal of
            Neuroscience Methods, 200(2), 257-271.
@@ -463,26 +412,20 @@ def compute_spect_hjorth_mobility(sfreq, data, normalize=False):
 
 def compute_spect_hjorth_complexity(sfreq, data, normalize=False):
     """ Hjorth complexity (computed from the power spectrum, per channel) [1].
-
     Parameters
     ----------
     sfreq : float
         Sampling rate of the data.
-
     data : ndarray, shape (n_channels, n_times)
-
     normalize : bool (default: False)
         Normalize the result by the total power (see [2]).
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
-
     References
     ----------
     .. [1] Mormann, F. et al. (2006). Seizure prediction: the long and winding
            road. Brain, 130(2), 314-333.
-
     .. [2] Teixeira, C. A. et al. (2011). EPILAB: A software package for
            studies on the prediction of epileptic seizures. Journal of
            Neuroscience Methods, 200(2), 257-271.
@@ -497,15 +440,12 @@ def compute_spect_hjorth_complexity(sfreq, data, normalize=False):
 
 def compute_hjorth_mobility(data):
     """ Hjorth mobility (computed in the time domain, per channel) [1].
-
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
-
     References
     ----------
     .. [1] Paivinen, N. et al. (2005). Epileptic seizure detection: A nonlinear
@@ -522,15 +462,12 @@ def compute_hjorth_mobility(data):
 
 def compute_hjorth_complexity(data):
     """ Hjorth complexity (computed in the time domain, per channel) [1].
-
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
-
     References
     ----------
     .. [1] Paivinen, N. et al. (2005). Epileptic seizure detection: A nonlinear
@@ -549,24 +486,19 @@ def compute_hjorth_complexity(data):
          nb.float32[:](nb.float32[:, :], nb.optional(nb.int32))])
 def compute_higuchi_fd(data, kmax=10):
     """ Higuchi Fractal Dimension (per channel) [1, 2].
-
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     kmax : int (default: 10)
         Maximum delay/offset (in number of samples).
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
-
     References
     ----------
     .. [1] Esteller, R. et al. (2001). A comparison of waveform fractal
            dimension algorithms. IEEE Transactions on Circuits and Systems I:
            Fundamental Theory and Applications, 48(2), 177-183.
-
     .. [2] Paivinen, N. et al. (2005). Epileptic seizure detection: A nonlinear
            viewpoint. Computer methods and programs in biomedicine, 79(2),
            151-159.
@@ -602,15 +534,12 @@ def compute_higuchi_fd(data, kmax=10):
 
 def compute_katz_fd(data):
     """ Katz Fractal Dimension (per channel) [1].
-
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
-
     References
     ----------
     .. [1] Esteller, R. et al. (2001). A comparison of waveform fractal
@@ -629,11 +558,9 @@ def compute_katz_fd(data):
 
 def compute_zero_crossings(data):
     """ Number of zero crossings (per channel).
-
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
@@ -643,15 +570,12 @@ def compute_zero_crossings(data):
 
 def compute_line_length(data):
     """ Line length (per channel) [1].
-
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
-
     References
     ----------
     .. [1] Esteller, R. et al. (2001). Line length: an efficient feature for
@@ -665,18 +589,14 @@ def compute_line_length(data):
 def compute_spect_entropy(sfreq, data):
     """ Spectral Entropy (Shannon entropy of the power spectrum,
     per channel) [1].
-
     Parameters
     ----------
     sfreq : float
         Sampling rate of the data
-
     data : ndarray, shape (n_channels, n_times)
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
-
     References
     ----------
     .. [1] Inouye, T. et al. (1991). Quantification of EEG irregularity by
@@ -691,21 +611,16 @@ def compute_spect_entropy(sfreq, data):
 
 def compute_svd_entropy(data, tau=2, emb=10):
     """ SVD entropy (per channel) [1].
-
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     tau : int (default: 2)
         Delay (number of samples).
-
     emb : int (default: 10)
         Embedding dimension.
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
-
     References
     ----------
     .. [1] Roberts, S. J. et al. Temporal and spatial complexity measures for
@@ -720,21 +635,16 @@ def compute_svd_entropy(data, tau=2, emb=10):
 
 def compute_svd_fisher_info(data, tau=2, emb=10):
     """ SVD Fisher Information (per channel) [1].
-
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     tau : int (default: 2)
         Delay (number of samples).
-
     emb : int (default: 10)
         Embedding dimension.
-
     Returns
     -------
     output : ndarray, shape (n_channels,)
-
     References
     ----------
     .. [1] Roberts, S. J. et al. Temporal and spatial complexity measures for
@@ -753,27 +663,21 @@ def compute_energy_freq_bands(sfreq, data, freq_bands=np.array([0.5, 4., 8.,
                                                                 100.]),
                               deriv_filt=True):
     """ Energy (of the signal, filtered by frequency bands ; per channel) [1].
-
     Parameters
     ----------
     sfreq : float
         Sampling rate of the data.
-
     data : ndarray, shape (n_channels, n_times)
-
     freq_bands : ndarray, shape (n_freqs,)
         (default: np.array([0.5, 4., 8., 13., 30., 100.]))
         Array defining the frequency bands. The j-th frequency band is defined
         as: [freq_bands[j], freq_bands[j + 1]] (0 <= j <= n_freqs - 1).
-
     deriv_filt : bool (default: False)
         If True, a derivative filter is applied to the input data before
         filtering (see Notes).
-
     Returns
     -------
     output : ndarray, shape (n_channels * (n_freqs - 1),)
-
     References
     ----------
     .. [1] Kharbouch, A. et al. (2011). An algorithm for seizure onset
@@ -799,13 +703,10 @@ def compute_spect_edge_freq(sfreq, data, ref_freq=None, edge=None):
     ----------
     sfreq : float
         Sampling rate of the data.
-
     data : ndarray, shape (n_channels, n_times)
-
     ref_freq : float or None (default: None)
         If not None, reference frequency for the computation of the spectral
         edge frequency. If None, `ref_freq = sfreq / 2` is used.
-
     edge : list of float or None (default: None)
         If not None, the values of `edge` are assumed to be positive and will
         be normalized to values between 0 and 1. Each entry of `edge`
@@ -817,7 +718,6 @@ def compute_spect_edge_freq(sfreq, data, ref_freq=None, edge=None):
     -------
     output : ndarray, shape (n_channels * n_edge,)
         With: `n_edge = 1` if `edge` is None or `n_edge = len(edge)` otherwise.
-
     References
     ----------
     .. [1] Mormann, F. et al. (2006). Seizure prediction: the long and winding
@@ -854,7 +754,6 @@ def compute_wavelet_coef_energy(data, wavelet_name='db4'):
     Parameters
     ----------
     data : ndarray, shape (n_channels, n_times)
-
     wavelet_name : str (default: db4)
         Wavelet name (to be used with `pywt.Wavelet`). The full list of Wavelet
         names are given by: `[name for family in pywt.families() for name in
@@ -866,7 +765,6 @@ def compute_wavelet_coef_energy(data, wavelet_name='db4'):
         The decomposition level (`levdec`) used for the DWT is either 6 or
         the maximum useful decomposition level (given the number of time points
         in the data and chosen wavelet ; see `pywt.dwt_max_level`).
-
     References
     ----------
     .. [1] Teixeira, C. A. et al. (2011). EPILAB: A software package for
@@ -881,4 +779,4 @@ def compute_wavelet_coef_energy(data, wavelet_name='db4'):
         coefs = pywt.wavedec(data[j, :], wavelet, level=levdec)
         for l in range(levdec):
             wavelet_energy[j, l] = np.sum(coefs[levdec - l] ** 2)
-    return wavelet_energy.ravel()
+return wavelet_energy.ravel()
