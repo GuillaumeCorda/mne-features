@@ -4,16 +4,16 @@
 
 """Univariate feature functions."""
 
-from math import sqrt, log, floor
+from math import sqrt, log, floor, gamma
 
 import numpy as np
-import pywt
-from scipy import stats, signal
+from scipy import stats
 from scipy.ndimage import convolve1d
 from sklearn.neighbors import KDTree
 
 from .mock_numba import nb
-from .utils import power_spectrum, embed, filt, _get_feature_funcs
+from .utils import (power_spectrum, _embed, _filt, _get_feature_funcs,
+                    _wavelet_coefs, _idxiter)
 
 
 def get_univariate_funcs(sfreq):
@@ -31,24 +31,30 @@ def get_univariate_funcs(sfreq):
     return _get_feature_funcs(sfreq, __name__)
 
 
-def _unbiased_autocorr(x):
-    """Unbiased autocorrelation.
+def _unbiased_autocorr(x, lags=50):
+    """Unbiased autocorrelation function.
+
+    The autocorrelation function is computed using the FFT of the signal.
 
     Parameters
     ----------
     x : ndarray, shape (n_times,)
 
+    lags : int (default: 50)
+        Number of lags for the autocorrelation function.
+
     Returns
     -------
-    ndarray, shape (2 * n_times + 1,)
+    ndarray, shape (n_lags,)
     """
-    m = x.shape[0] - 1
-    lags = np.arange(-m, m + 1)
-    s = np.add(m, - np.abs(lags))
-    s[np.where(s <= 0)] = 1
-    autocorr = signal.fftconvolve(x, x[::-1], mode='full')
-    autocorr /= s
-    return autocorr
+    n_times = x.shape[0]
+    xm = x - np.mean(x)
+    dnorm = np.r_[np.arange(1, n_times + 1), np.arange(n_times - 1, 0, -1)]
+    fft = np.fft.fft(xm, n=n_times)
+    acf = np.fft.ifft(fft * np.conjugate(fft))[:n_times]
+    acf /= dnorm[n_times - 1:]
+    acf = acf.real
+    return acf[:(lags + 1)] / acf[0]
 
 
 @nb.jit([nb.float64(nb.float64[:], nb.float64[:]),
@@ -98,6 +104,32 @@ def _accumulate_std(x):
             s += (x[k] - m) ** 2
         s /= j
         r[j] = sqrt(s)
+    return r
+
+
+@nb.jit([nb.float64[:](nb.float64[:]), nb.float32[:](nb.float32[:])],
+        nopython=True)
+def _accumulate_max(x):
+    r = np.zeros((x.shape[0],), dtype=x.dtype)
+    for j in range(x.shape[0]):
+        m = -np.inf
+        for k in range(j + 1):
+            if x[k] >= m:
+                m = x[k]
+        r[j] = m
+    return r
+
+
+@nb.jit([nb.float64[:](nb.float64[:]), nb.float32[:](nb.float32[:])],
+        nopython=True)
+def _accumulate_min(x):
+    r = np.zeros((x.shape[0],), dtype=x.dtype)
+    for j in range(x.shape[0]):
+        m = np.inf
+        for k in range(j + 1):
+            if x[k] <= m:
+                m = x[k]
+        r[j] = m
     return r
 
 
@@ -211,8 +243,84 @@ def compute_kurtosis(data):
     return stats.kurtosis(data, axis=ndim - 1, fisher=False)
 
 
+@nb.jit([nb.float64[:, :](nb.float64[:, :]),
+         nb.float32[:, :](nb.float32[:, :])], nopython=True)
+def _hurst_exp_compute_rs(x):
+    """Utility function for :func:`compute_hurst_exp`.
+
+    Parameters
+    ----------
+    x : ndarray, shape (n_seqs, n_times)
+
+    Returns
+    -------
+    output : ndarray, shape (n_seqs, n_times - 1)
+    """
+    n_seqs, n_times = x.shape
+    rs = np.zeros((n_seqs, n_times - 1), dtype=x.dtype)
+    for j in range(n_seqs):
+        m = 0
+        for k in range(n_times):
+            m += x[j, k]
+        m /= n_times
+        y = np.empty((n_times,))
+        for k in range(n_times):
+            y[k] = x[j, k] - m
+        z = np.empty((n_times,))
+        z[0] = y[0]
+        for k in range(1, n_times):
+            z[k] = z[k - 1] + y[k]
+        r = _accumulate_max(z) - _accumulate_min(z)
+        s = _accumulate_std(x[j, :])
+        for k in range(1, n_times):
+            if s[k] == 0:
+                rs[j, k - 1] = np.nan
+            else:
+                rs[j, k - 1] = r[k] / s[k]
+    return rs
+
+
+def _hurst_exp_helper(x, n_splits=20):
+    """Helper function for :func:`compute_hurst_exp`.
+
+    Compute the Hurst exponent from a univariate time series. The Hurst
+    exponent is defined as the slope of the least-squares regression line
+    going through a cloud of `n_splits` points. Each point is obtained by
+    considering sub-series of `x` of `n_splits` different lenghts.
+
+    Parameters
+    ----------
+    x : ndarray, shape (n_times,)
+
+    Returns
+    -------
+    output : ndarray, shape (n_splits,)
+    """
+    n_times = x.shape[0]
+    _splits = np.floor(np.logspace(start=4, stop=np.log2(n_times / 2),
+                                   num=n_splits, base=2.))
+    splits = np.unique(_splits).astype(int)
+    reg = np.zeros((splits.size,))
+    for j, n in enumerate(splits):
+        a = x.copy()
+        d = int(floor(n_times / n))
+        a = np.lib.stride_tricks.as_strided(a, shape=(d, n),
+                                            strides=(n * a.strides[-1],
+                                                     a.strides[-1]))
+        _rs = _hurst_exp_compute_rs(a)
+        _rs = _rs[~np.isnan(_rs)]
+        reg[j] = np.log(np.mean(_rs))
+        s = sum([sqrt((n - i) / i) for i in range(1, n)]) * ((n - 0.5) / n)
+        if n <= 340:
+            corr = (gamma((n - 1) / 2.) / (sqrt(np.pi) * gamma(n / 2.))) * s
+        else:
+            corr = ((n - 0.5) / n) * (1. / sqrt(np.pi * n / 2.)) * s
+        reg[j] -= (np.log(corr) - np.log(n) / 2)
+    return _slope_lstsq(np.log(splits), reg)
+
+
 def compute_hurst_exp(data):
-    """Hurst exponent of the data (per channel) ([Deva14]_, [HursWiki]_).
+    """Hurst exponent of the data (per channel) ([Rash04]_, [Deva14]_).
 
     Parameters
     ----------
@@ -228,28 +336,23 @@ def compute_hurst_exp(data):
 
     References
     ----------
+    .. [Rash04] Rasheed, B. Q. K. et al. (2004). Hurst exponent and financial
+                market predictability. In IASTED conference on Financial
+                Engineering and Applications (FEA 2004) (pp. 203-209).
+
     .. [Deva14] Devarajan, K. et al. (2014). EEG-Based Epilepsy Detection and
                 Prediction. International Journal of Engineering and
                 Technology, 6(3), 212.
-
-    .. [HursWiki] https://en.wikipedia.org/wiki/Hurst_exponent
     """
-    n_channels = data.shape[0]
-    hurst_exponent = np.empty((n_channels,))
+    n_channels, n_times = data.shape
+    hurst = np.empty((n_channels,))
     for j in range(n_channels):
-        m = np.mean(data[j, :])
-        y = data[j, :] - m
-        z = np.cumsum(y)
-        r = (np.maximum.accumulate(z) - np.minimum.accumulate(z))[1:]
-        s = _accumulate_std(data[j, :])[1:]
-        s[np.where(s == 0)] = 1e-12  # avoid dividing by 0
-        y_reg = np.log(r / s)
-        x_reg = np.log(np.arange(1, y_reg.shape[0] + 1))
-        hurst_exponent[j] = _slope_lstsq(x_reg, y_reg)
-    return hurst_exponent.ravel()
+        hurst[j] = _hurst_exp_helper(data[j, :])
+    return hurst
 
 
-def _app_samp_entropy_helper(data, emb, metric='chebyshev'):
+def _app_samp_entropy_helper(data, emb, metric='chebyshev',
+                             approximate=True):
     """Utility function for `compute_app_entropy`` and `compute_samp_entropy`.
 
     Parameters
@@ -262,6 +365,11 @@ def _app_samp_entropy_helper(data, emb, metric='chebyshev'):
     metric : str (default: chebyshev)
         Name of the metric function used with KDTree. The list of available
         metric functions is given by: ``KDTree.valid_metrics``.
+
+    approximate : bool (default: True)
+        If True, the returned values will be used to compute the
+        Approximate Entropy (AppEn). Otherwise, the values are used to compute
+        the Sample Entropy (SampEn).
 
     Returns
     -------
@@ -276,20 +384,28 @@ def _app_samp_entropy_helper(data, emb, metric='chebyshev'):
     for j in range(n_channels):
         r = 0.2 * np.std(data[j, :], axis=-1, ddof=1)
         # compute phi(emb, r)
-        emb_data1 = embed(data[j, None], emb, 1)[0, :, :]
-        count = KDTree(emb_data1, metric=metric).query_radius(
+        _emb_data1 = _embed(data[j, None], emb, 1)[0, :, :]
+        if approximate:
+            emb_data1 = _emb_data1
+        else:
+            emb_data1 = _emb_data1[:-1, :]
+        count1 = KDTree(emb_data1, metric=metric).query_radius(
             emb_data1, r, count_only=True).astype(np.float64)
-        phi[j, 0] = np.mean(np.log(count / emb_data1.shape[0]))
         # compute phi(emb + 1, r)
-        emb_data2 = embed(data[j, None], emb + 1, 1)[0, :, :]
-        count = KDTree(emb_data2, metric=metric).query_radius(
+        emb_data2 = _embed(data[j, None], emb + 1, 1)[0, :, :]
+        count2 = KDTree(emb_data2, metric=metric).query_radius(
             emb_data2, r, count_only=True).astype(np.float64)
-        phi[j, 1] = np.mean(np.log(count / emb_data2.shape[0]))
+        if approximate:
+            phi[j, 0] = np.mean(np.log(count1 / emb_data1.shape[0]))
+            phi[j, 1] = np.mean(np.log(count2 / emb_data2.shape[0]))
+        else:
+            phi[j, 0] = np.mean((count1 - 1) / (emb_data1.shape[0] - 1))
+            phi[j, 1] = np.mean((count2 - 1) / (emb_data2.shape[0] - 1))
     return phi
 
 
 def compute_app_entropy(data, emb=2, metric='chebyshev'):
-    """Approximate Entropy (AppEn, per channel) ([Boro15]_).
+    """Approximate Entropy (AppEn, per channel) ([Rich00]_).
 
     Parameters
     ----------
@@ -313,16 +429,18 @@ def compute_app_entropy(data, emb=2, metric='chebyshev'):
 
     References
     ----------
-    .. [Boro15] Borowska, M. (2015). Entropy-based algorithms in the analysis
-                of biomedical signals. Studies in Logic, Grammar and Rhetoric,
-                43(1), 21-32.
+    .. [Rich00] Richman, J. S. et al. (2000). Physiological time-series
+                analysis using approximate entropy and sample entropy.
+                American Journal of Physiology-Heart and Circulatory
+                Physiology, 278(6), H2039-H2049.
     """
-    phi = _app_samp_entropy_helper(data, emb=emb, metric=metric)
+    phi = _app_samp_entropy_helper(data, emb=emb, metric=metric,
+                                   approximate=True)
     return np.subtract(phi[:, 0], phi[:, 1])
 
 
 def compute_samp_entropy(data, emb=2, metric='chebyshev'):
-    """Sample Entropy (SampEn, per channel) ([Boro15]_).
+    """Sample Entropy (SampEn, per channel) ([Rich00]_).
 
     Parameters
     ----------
@@ -343,8 +461,12 @@ def compute_samp_entropy(data, emb=2, metric='chebyshev'):
     -----
     Alias of the feature function: **samp_entropy**
     """
-    phi = _app_samp_entropy_helper(data, emb=emb, metric=metric)
-    return np.log(np.divide(phi[:, 0], phi[:, 1]))
+    phi = _app_samp_entropy_helper(data, emb=emb, metric=metric,
+                                   approximate=False)
+    if np.allclose(phi[:, 0], 0) or np.allclose(phi[:, 1], 0):
+        raise ValueError('Sample Entropy is not defined.')
+    else:
+        return -np.log(np.divide(phi[:, 1], phi[:, 0]))
 
 
 def compute_decorr_time(sfreq, data):
@@ -374,10 +496,10 @@ def compute_decorr_time(sfreq, data):
     n_channels, n_times = data.shape
     decorrelation_times = np.empty((n_channels,))
     for j in range(n_channels):
-        ac_channel = _unbiased_autocorr(data[j, :])
-        zero_cross = ac_channel[(n_times - 1):] <= 0
-        if np.any(zero_cross):
-            decorr_time = np.argmax(zero_cross)
+        _acf = _unbiased_autocorr(data[j, :])
+        zc = np.diff(np.sign(_acf)) != 0
+        if np.any(zc):
+            decorr_time = np.argmax(zc) + 1
             decorr_time /= sfreq
         else:
             decorr_time = -1
@@ -385,9 +507,48 @@ def compute_decorr_time(sfreq, data):
     return decorrelation_times
 
 
+def _freq_bands_helper(sfreq, freq_bands):
+    """Utility function to define frequency bands.
+
+    This utility function is to be used with :func:`compute_pow_freq_bands` and
+    :func:`compute_energy_freq_bands`. It essentially checks if the given
+    parameter ``freq_bands`` is valid and raises an error if not.
+
+    Parameters
+    ----------
+    sfreq : float
+        Sampling rate of the data.
+
+    freq_bands : ndarray, shape (n_freq_bands + 1,) or (n_freq_bands, 2)
+        Array defining frequency bands.
+
+    Returns
+    -------
+    valid_freq_bands : ndarray, shape (n_freq_bands, 2)
+    """
+    if not np.logical_and(freq_bands >= 0, freq_bands <= sfreq / 2).all():
+        raise ValueError('The entries of the given `freq_bands` parameter '
+                         '(%s) must be positive and less than the Nyquist '
+                         'frequency.' % str(freq_bands))
+    else:
+        if freq_bands.ndim == 1:
+            n_freq_bands = freq_bands.shape[0] - 1
+            valid_freq_bands = np.empty((n_freq_bands, 2))
+            for j in range(n_freq_bands):
+                valid_freq_bands[j, :] = freq_bands[j:j + 2]
+        elif freq_bands.ndim == 2 and freq_bands.shape[-1] == 2:
+            valid_freq_bands = freq_bands
+        else:
+            raise ValueError('The given value (%s) for the `freq_bands` '
+                             'parameter is not valid. Only 1D or 2D arrays '
+                             'with shape (n_freq_bands, 2) are accepted.'
+                             % str(freq_bands))
+        return valid_freq_bands
+
+
 def compute_pow_freq_bands(sfreq, data, freq_bands=np.array([0.5, 4., 8., 13.,
                                                              30., 100.]),
-                           normalize=True):
+                           normalize=True, ratios=None):
     """Power Spectrum (computed by frequency bands) ([Teix11]_).
 
     Parameters
@@ -397,14 +558,31 @@ def compute_pow_freq_bands(sfreq, data, freq_bands=np.array([0.5, 4., 8., 13.,
 
     data : ndarray, shape (n_channels, n_times)
 
-    freq_bands : ndarray, shape (n_freqs,) (default:
-    np.array([0.5, 4., 8., 13., 30., 100.]))
-        Array defining the frequency bands. The j-th frequency band is defined
-        as: ``[freq_bands[j], freq_bands[j + 1]]`` (0 <= j <= n_freqs - 1).
+    freq_bands : ndarray, shape (n_freq_bands + 1,) or (n_freq_bands, 2)
+        Array defining the frequency bands. If ``freq_bands`` has shape
+        ``(n_freq_bands + 1,)`` the entries of ``freq_bands`` define
+        ``n_freq_bands`` **contiguous** frequency bands as follows: the i-th
+        frequency bands is defined as [freq_bands[i], freq_bands[i + 1]]
+        (0 <= i <= n_freq_bands - 1). If ``freq_bands`` has shape
+        ``(n_freq_bands, 2)``, the rows of ``freq_bands`` define
+        ``n_freq_bands`` **non-contiguous** frequency bands. By default,
+        ``freq_bands`` is: ``np.array([0.5, 4., 8., 13., 30., 100.])``.
+        The entries of ``freq_bands`` should be between 0 and sfreq / 2 (the
+        Nyquist frequency) as the function uses the one-sided PSD.
 
     normalize : bool (default: True)
         If True, the average power in each frequency band is normalized by
         the total power.
+
+    ratios : str or None (default: None)
+        If not None, the possible values for the parameter ``ratios`` are:
+        ``all`` or ``only``. If ``all``, the function will return the power
+        (computed in the given frequency bands) as well as the ratios between
+        power in different frequency bands. All the possible pairs of distinct
+        frequency bands are considered (if n_freq_bands are given,
+        n_freq_bands * (n_freq_bands - 1) are computed). If ``only``, the
+        function returns only the ratios of power in bands. If None, no
+        ratio is computed.
 
     Returns
     -------
@@ -415,17 +593,31 @@ def compute_pow_freq_bands(sfreq, data, freq_bands=np.array([0.5, 4., 8., 13.,
     Alias of the feature function: **pow_freq_bands**
     """
     n_channels = data.shape[0]
-    n_freqs = freq_bands.shape[0]
+    fb = _freq_bands_helper(sfreq, freq_bands)
+    n_freq_bands = fb.shape[0]
     ps, freqs = power_spectrum(sfreq, data, return_db=False)
-    idx_freq_bands = np.digitize(freqs, freq_bands)
-    pow_freq_bands = np.empty((n_channels, n_freqs - 1))
-    for j in range(1, n_freqs):
-        ps_band = ps[:, idx_freq_bands == j]
-        pow_freq_bands[:, j - 1] = np.sum(ps_band, axis=-1)
+    pow_freq_bands = np.empty((n_channels, n_freq_bands))
+    for j in range(n_freq_bands):
+        mask = np.logical_and(freqs >= fb[j, 0], freqs <= fb[j, 1])
+        ps_band = ps[:, mask]
+        pow_freq_bands[:, j] = np.sum(ps_band, axis=-1)
     if normalize:
         pow_freq_bands = np.divide(pow_freq_bands,
                                    np.sum(ps, axis=-1)[:, None])
-    return pow_freq_bands.ravel()
+    if ratios is None:
+        return pow_freq_bands.ravel()
+    elif ratios not in ['all', 'only']:
+        raise ValueError('The given value (%s) for the parameter `ratios` '
+                         'is not valid. Valid values are: `all` or `only`.'
+                         % str(ratios))
+    else:
+        band_ratios = np.empty((n_channels, n_freq_bands * (n_freq_bands - 1)))
+        for pos, i, j in _idxiter(n_freq_bands, triu=False):
+            band_ratios[:, pos] = (pow_freq_bands[:, i] / pow_freq_bands[:, j])
+        if ratios == 'all':
+            return np.r_[pow_freq_bands.ravel(), band_ratios.ravel()]
+        else:
+            return band_ratios.ravel()
 
 
 def compute_hjorth_mobility_spect(sfreq, data, normalize=False):
@@ -648,6 +840,29 @@ def compute_katz_fd(data):
     return katz
 
 
+@nb.jit([nb.float64[:](nb.float64[:, :]), nb.float32[:](nb.float32[:, :])],
+        nopython=True)
+def _zero_crossings(data):
+    """Utility function for :func:`compute_zero_crossings`.
+
+    Parameters
+    ----------
+    data : ndarray, shape (n_channels, n_times)
+
+    Returns
+    -------
+    output : ndarray, shape (n_channels,)
+    """
+    n_channels, n_times = data.shape
+    zc = np.zeros((n_channels,), dtype=data.dtype)
+    for j in range(n_channels):
+        for i in range(n_times - 1):
+            if data[j, i] == 0 or data[j, i] * data[j, i + 1] < 0:
+                zc[j] += 1
+        zc[j] += int(data[j, n_times - 1] == 0)
+    return zc
+
+
 def compute_zero_crossings(data):
     """Number of zero crossings (per channel).
 
@@ -663,7 +878,7 @@ def compute_zero_crossings(data):
     -----
     Alias of the feature function: **zero_crossings**
     """
-    return np.sum(np.diff(np.sign(data), axis=-1) != 0, axis=-1)
+    return _zero_crossings(data)
 
 
 def compute_line_length(data):
@@ -689,7 +904,7 @@ def compute_line_length(data):
                  International Conference of the IEEE (Vol. 2, pp. 1707-1710).
                  IEEE.
     """
-    return np.sum(np.abs(np.diff(data, axis=-1)), axis=-1)
+    return np.mean(np.abs(np.diff(data, axis=-1)), axis=-1)
 
 
 def compute_spect_entropy(sfreq, data):
@@ -754,7 +969,7 @@ def compute_svd_entropy(data, tau=2, emb=10):
                 interfacing. Medical & biological engineering & computing,
                 37(1), 93-98.
     """
-    _, sv, _ = np.linalg.svd(embed(data, d=emb, tau=tau))
+    _, sv, _ = np.linalg.svd(_embed(data, d=emb, tau=tau))
     m = np.sum(sv, axis=-1)
     sv_norm = np.divide(sv, m[:, None])
     return -np.sum(np.multiply(sv_norm, np.log2(sv_norm)), axis=-1)
@@ -781,7 +996,7 @@ def compute_svd_fisher_info(data, tau=2, emb=10):
     -----
     Alias of the feature function: **svd_fisher_info**
     """
-    _, sv, _ = np.linalg.svd(embed(data, d=emb, tau=tau))
+    _, sv, _ = np.linalg.svd(_embed(data, d=emb, tau=tau))
     m = np.sum(sv, axis=-1)
     sv_norm = np.divide(sv, m[:, None])
     aux = np.divide(np.diff(sv_norm, axis=-1) ** 2, sv_norm[:, :-1])
@@ -801,10 +1016,17 @@ def compute_energy_freq_bands(sfreq, data, freq_bands=np.array([0.5, 4., 8.,
 
     data : ndarray, shape (n_channels, n_times)
 
-    freq_bands : ndarray, shape (n_freqs,)
-        (default: np.array([0.5, 4., 8., 13., 30., 100.]))
-        Array defining the frequency bands. The j-th frequency band is defined
-        as: [freq_bands[j], freq_bands[j + 1]] (0 <= j <= n_freqs - 1).
+    freq_bands : ndarray, shape (n_freq_bands + 1,) or (n_freq_bands, 2)
+        Array defining the frequency bands. If ``freq_bands`` has shape
+        ``(n_freq_bands + 1,)`` the entries of ``freq_bands`` define
+        ``n_freq_bands`` **contiguous** frequency bands as follows: the i-th
+        frequency bands is defined as [freq_bands[i], freq_bands[i + 1]]
+        (0 <= i <= n_freq_bands - 1). If ``freq_bands`` has shape
+        ``(n_freq_bands, 2)``, the rows of ``freq_bands`` define
+        ``n_freq_bands`` **non-contiguous** frequency bands. By default,
+        ``freq_bands`` is: ``np.array([0.5, 4., 8., 13., 30., 100.])``.
+        The entries of ``freq_bands`` should be between 0 and sfreq / 2 (the
+        Nyquist frequency) as the function uses the one-sided PSD.
 
     deriv_filt : bool (default: False)
         If True, a derivative filter is applied to the input data before
@@ -824,16 +1046,17 @@ def compute_energy_freq_bands(sfreq, data, freq_bands=np.array([0.5, 4., 8.,
                 detection using intracranial EEG. Epilepsy & Behavior, 22,
                 S29-S35.
     """
-    n_freqs = freq_bands.shape[0]
     n_channels = data.shape[0]
-    band_energy = np.empty((n_channels, n_freqs - 1))
+    fb = _freq_bands_helper(sfreq, freq_bands)
+    n_freq_bands = fb.shape[0]
+    band_energy = np.empty((n_channels, n_freq_bands))
     if deriv_filt:
         _data = convolve1d(data, [1., 0., -1.], axis=-1, mode='nearest')
     else:
         _data = data
-    for j in range(1, n_freqs):
-        filtered_data = filt(sfreq, _data, freq_bands[(j - 1):(j + 1)])
-        band_energy[:, j - 1] = np.sum(filtered_data ** 2, axis=-1)
+    for j in range(n_freq_bands):
+        filtered_data = _filt(sfreq, _data, fb[j, :])
+        band_energy[:, j] = np.sum(filtered_data ** 2, axis=-1)
     return band_energy.ravel()
 
 
@@ -948,9 +1171,12 @@ def compute_wavelet_coef_energy(data, wavelet_name='db4'):
     return wavelet_energy_list
 
 
-@nb.jit([nb.float64[:, :](nb.float64[:, :])], nopython=True)
-def compute_teager_kaiser_energy(data):
-    """ Compute the Teager-Kaiser energy`.
+@nb.jit([nb.float64[:, :](nb.float64[:, :]),
+         nb.float32[:, :](nb.float32[:, :])], nopython=True)
+def _tk_energy(data):
+    """Teager-Kaiser Energy.
+
+    Utility function for :func:`compute_taeger_kaiser_energy`.
 
     Parameters
     ----------
@@ -958,15 +1184,48 @@ def compute_teager_kaiser_energy(data):
 
     Returns
     -------
-    ndarray, shape (n_channels, n_times-2)
+    output : ndarray, shape (n_channels, n_times - 2)
+    """
+    n_channels, n_times = data.shape
+    tke = np.empty((n_channels, n_times - 2), dtype=data.dtype)
+    for j in range(n_channels):
+        for i in range(1, n_times - 1):
+            tke[j, i - 1] = data[j, i] ** 2 - data[j, i - 1] * data[j, i + 1]
+    return tke
+
+
+def compute_teager_kaiser_energy(data, wavelet_name='db4'):
+    """Compute the Teager-Kaiser energy ([Bada17]_).
+
+    Parameters
+    ----------
+    data : ndarray, shape (n_channels, n_times)
+
+    wavelet_name : str (default: 'db4')
+        Wavelet name (to be used with ``pywt.Wavelet``). The full list of
+        Wavelet names are given by: ``[name for family in pywt.families() for
+        name in pywt.wavelist(family)]``.
+
+    Returns
+    -------
+    output : ndarray, shape (n_channels * (levdec + 1) * 2,)
 
     Notes
     -----
     Alias of the feature function: **teager_kaiser_energy**
+
+    References
+    ----------
+    .. [Bada17] Badani, S. et al. (2017). Detection of epilepsy based on
+                discrete wavelet transform and Teager-Kaiser energy operator.
+                In Calcutta Conference (CALCON). 2017 IEEE (pp. 164-167).
     """
     n_channels, n_times = data.shape
-    tke = np.zeros((n_channels, n_times - 2))
-    for i in range(n_channels):
-        for j in range(1, n_times - 1):
-            tke[i, j - 1] = data[i, j]**2 - data[i, j - 1] * data[i, j + 1]
-    return tke
+    coefs = _wavelet_coefs(data, wavelet_name)
+    levdec = len(coefs) - 1
+    tke = np.empty((n_channels, levdec + 1, 2))
+    for l in range(levdec + 1):
+        tk_energy = _tk_energy(coefs[l])
+        tke[:, l, 0] = np.mean(tk_energy, axis=-1)
+        tke[:, l, 1] = np.std(tk_energy, ddof=1, axis=-1)
+    return tke.ravel()

@@ -11,21 +11,28 @@ from math import floor
 from warnings import warn
 
 import numpy as np
+import pywt
 from mne.filter import filter_data
 
 from .mock_numba import nb
 
 
 @nb.jit()
-def triu_idx(n, include_diag=False):
+def _idxiter(n, triu=True, include_diag=False):
     """Enumeration of the upper-triangular part of a squre matrix.
 
-    Utility function to generate an enumeration of the pairs of indices
-    (i,j) corresponding to the upper triangular part of a (n, n) array.
+    Utility function to generate an enumeration (C-order) of the pairs of
+    indices (i,j) corresponding to the upper triangular part of a (n, n) array.
 
     Parameters
     ----------
     n : int
+
+    triu : bool (default: True)
+        If True, the returned generator is an enumeration of the upper
+        triangular part of a (n, n) array. If False, it is an enumeration of
+        all the entries in the array (except for diagonal entries if
+        ``include_diag`` is False).
 
     include_diag : bool (default: False)
         If False, the pairs of indices corresponding to the diagonal are
@@ -37,12 +44,15 @@ def triu_idx(n, include_diag=False):
     """
     pos = -1
     for i in range(n):
-        for j in range(i + 1 - int(include_diag), n):
-            pos += 1
-            yield pos, i, j
+        for j in range(i * int(triu), n):
+            if not include_diag and i == j:
+                continue
+            else:
+                pos += 1
+                yield pos, i, j
 
 
-def embed(x, d, tau):
+def _embed(x, d, tau):
     """Time-delay embedding.
 
     Parameters
@@ -124,7 +134,7 @@ def power_spectrum(sfreq, data, return_db=False):
         return ps, freqs
 
 
-def filt(sfreq, data, filter_freqs, verbose=False):
+def _filt(sfreq, data, filter_freqs, verbose=False):
     """Filter data.
 
     Utility function to filter data which acts as a wrapper for
@@ -201,3 +211,28 @@ def _get_feature_funcs(sfreq, module_name):
             else:
                 feature_funcs[alias] = func
     return feature_funcs
+
+
+def _wavelet_coefs(data, wavelet_name='db4'):
+    """Compute Discrete Wavelet Transform coefficients.
+
+    Parameters
+    ----------
+    data : ndarray, shape (n_channels, n_times)
+
+    wavelet_name : str (default: db4)
+         Wavelet name (to be used with ``pywt.Wavelet``). The full list of
+         Wavelet names are given by: ``[name for family in pywt.families() for
+         name in pywt.wavelist(family)]``.
+
+    Returns
+    -------
+    coefs : list of ndarray
+         Coefficients of a DWT (Discrete Wavelet Transform). ``coefs[0]`` is
+         the array of approximation coefficient and ``coefs[1:]`` is the list
+         of detail coefficients.
+    """
+    wavelet = pywt.Wavelet(wavelet_name)
+    levdec = min(pywt.dwt_max_level(data.shape[-1], wavelet.dec_len), 6)
+    coefs = pywt.wavedec(data, wavelet=wavelet, level=levdec)
+    return coefs
